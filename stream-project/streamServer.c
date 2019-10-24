@@ -137,6 +137,7 @@ int main(int argc, char **argv)
 		if (fork()==0){ // figlio
 			/*Chiusura FileDescr non utilizzati*/
 			close(listen_sd);
+			
 
             //Recupero informazioni client per stampa.
 			host=gethostbyaddr( (char *) &cliaddr.sin_addr, sizeof(cliaddr.sin_addr), AF_INET);
@@ -151,7 +152,8 @@ int main(int argc, char **argv)
                 perror("read numero linea da eliminare fallita");
                 exit(EXIT_IO);
             }
-
+			printf("Linea da cancellare: %d\n", deleteLine);
+			
             //Posso procedere:
             //Inizio a leggere il file
             //Mentre leggo conto le righe.
@@ -161,24 +163,26 @@ int main(int argc, char **argv)
             //currentLine = 0;
             num = 0;
             while((nread = read(conn_sd, &tmpChar, sizeof(char))) > 0){
+				
                 //Salvo il carattere in un buffer temporaneo.
-                buff[num++] = tmpChar;
+                buff[num] = tmpChar;
 
                 //Se il carattere è il fine linea:
                 if(buff[num] == '\n'){
-                    
                     //Se consideriamo come prima linea la 1 allora faccio prima:
                     currentLine++;
 
                     //Controllo linea da saltare
                     if(currentLine != deleteLine){
-                        //Scrivo indietro la riga con \n finale.
+                        //Scrivo indietro la riga con \n finale e la stampo!
                         write(conn_sd, buff, num);
+						write(conn_sd, "\n", sizeof(char));
                     }
 
                     //Resetto il contatore.
                     num = 0;
-                }
+                } else 
+					num++;
             }
 
             if(nread < 0){
@@ -190,7 +194,7 @@ int main(int argc, char **argv)
 		} // figlio
 
         //PADRE
-		close(conn_sd);  // padre chiude socket di connessione non di scolto
+		close(conn_sd);  // padre chiude socket di connessione non di ascolto
 	} // ciclo for infinito
 }
 
