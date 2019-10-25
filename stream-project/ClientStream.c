@@ -15,6 +15,8 @@
 
 #define PARAM_ERR 1
 #define NETW_ERR 2
+#define TX_NETW_ERR 3
+#define RX_NETW_ERR 4
 
 int main(int argc, char const *argv[]) {
     //Client nodoServer
@@ -69,6 +71,8 @@ int main(int argc, char const *argv[]) {
             if(ch == '\n')
                 nCurrLinee++;
         }
+        //una volta che ho terminato LSEEK!!!! Devo rispostare I/O pointer in cima al file.
+        lseek(fdCurrFile, 0, SEEK_SET);
 
         //il file passato presente in nomeFile è corretto
         printf("Inserisci il numero di linea da rimuovere dal file, %s:\n", nomeFile);
@@ -108,6 +112,8 @@ int main(int argc, char const *argv[]) {
         //che so per certo esistere! NON VA RICONTROLLATO DI LA, il server quando incontra la linea da rimuovere semplicemente 
         //non la reinvia.
 
+        //scommenta dopo per la richiesta di connessione al server
+        
         if(!connected){ //solo la prima volta creo la connessione
             //creo la socket
             if((fdSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0){
@@ -128,13 +134,84 @@ int main(int argc, char const *argv[]) {
 
             connected = 1;
         }
-    
+        
 
         //sono connesso e posso comunicare con fdSocket
 
         //invio il numero della riga da rimuovere
-        write(fdSocket, nRmLinea, sizeof(int));
+        if((write(fdSocket, &nRmLinea, sizeof(int))) < 0){
+            perror("Errore durante la scrittura del numero di linea da rimuovere al server.");
+            //qua sarebbe contro protocollo proseguire dall'altro lato ho il server che si aspetta proprio il numero della 
+            //riga da rimuovere! --> chiudo così dopo un po' anche il server si accorgerà che qualcosa non è andato e chiuderà
+            //la connessione con il corrispettivo client per il quale si è verificato l'errore.
+            close(fdSocket);
+            close(fdCurrFile);
+            exit(TX_NETW_ERR);
+        }
+        printf("CLIENT: inviato al server il numero di linea da eliminare %d.\n", nRmLinea);
 
+
+        //invio il file dall'altra parte su fdSocket una riga alla volta
+        //IPOTESI: tutte le linee sono al più lunghe DIM_BUFFER
+        char currLine[DIM_BUFFER];
+        int i = 0; //indice nella stringa currLine dove salvare currCh fino al fine linea prima di inviare dall'altra parte
+        char currCh;
+        
+        while((read(fdCurrFile, &currCh, sizeof(char))) > 0){
+            if(currCh == '\n'){ //letto il fine linea aggiungo terminatore e invio la linea sulla socket.
+                currLine[i] = '\0';
+                //debug stampo la linea letta dato che è finita!
+                printf("%s\n", currLine);
+
+                i = 0;
+                
+                if((write(fdSocket, currLine, strlen(currLine))) < 0){
+                    perror("Errore durante il trasferimento del file verso il server.");
+                    //Anche in questo caso dall'altro lato ho un server che attende tutto il file per rispettare il protocollo
+                    //non posso andare avanti è giusto anche in questo caso uscire.
+                    close(fdSocket);
+                    close(fdCurrFile);
+                    exit(TX_NETW_ERR);
+                }
+            } else { //letto un carattere che non è il fine linea lo devo aggiungere alla linea e incrementare i
+                currLine[i] = currCh;
+                i++;
+            }
+        }
+        printf("CLIENT: inviato file %s al server, voglio rimuovere la linea %d.\n", nomeFile, nRmLinea);
+
+        //A questo punto sono riuscito ad inviare tutto il file dall'altra parte e ora divento un filtro ben fatto,
+        //fino a quando il server mi invia qualcosa io vado a sovrascrivere il file che ho appena inviato.
+
+        //Mi devo ricordare innanzitutto di riposizionare I/O pointer in cima al file, e tramite la memset impostare il
+        //contenuto del file a 0, dato che quello che vado a sovrascrivere avrà contenuto più corto.
+
+        //dato che ero in fondo se chiedo di restituire la posizione del file so quanto è lungo già!!!
+        int fileLength = lseek(fdCurrFile, 0, SEEK_END);
+        printf("Posizione IO Pointer finale: %d\n", fileLength);
+        printf("Dimensione file: %ld\n", fileLength*sizeof(char));
+        
+        //riavvolgo fino all'inizio, resetto il contenuto del file
+        ftruncate(fdCurrFile, 0);
+        ftruncate(fdCurrFile, fileLength*sizeof(char));
+        lseek(fdCurrFile, 0, SEEK_SET);
+
+        //prova del 9 per verificare se la dimensione coincide dopo queste operazioni mi sposto in fondo e stampo il 
+        //valore deve coincidere con quello di prima
+        //fileLength = lseek(fdCurrFile, 0, SEEK_END);
+        //printf("Posizione IO Pointer finale dopo reset della dimensione e contenuto: %d\n", fileLength);
+
+        //ricevo il file in risposta dal server lo salvo sia sul file sia stampo a console
+        while((read(fdSocket, &currCh, sizeof(char))) > 0){
+            printf("%c", currCh);
+            if((write(fdCurrFile, &currCh, sizeof(char))) < 0){
+                perror("Errore sovrascrittura sul file.");
+                close(fdSocket);
+                close(fdCurrFile);
+                exit(RX_NETW_ERR);
+            }
+        }
+        printf("CLIENT: ricevuto file dal server senza la linea che andava eliminata!");
 
         //chiudo file e risetto a zero il n delle linee
         close(fdCurrFile);
@@ -146,59 +223,6 @@ int main(int argc, char const *argv[]) {
 
     if(connected) //solo se la connessione è stata creata chiudo il socket descriptor
         close(fdSocket);
-
-    /*
-
-    serverSock.sin_addr.s_addr= ((struct in_addr *)(host->h_addr_list[0]))->s_addr;
-
-    int fdSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if(fdSocket < 0){
-        perror("Impossibile creare la socket.");
-        exit(1);
-    }
-
-    if((connect(fdSocket,(struct sockaddr *) &serverSock, sizeof(serverSock))) < 0){
-        perror("Impossibile instaurare la connessione.");
-        exit(1);
-    }
-    
-    //a connessione instaurata mando il nome del file e aspetto un ACK
-    write(fdSocket, argv[2], strlen(argv[2]));
-
-    char risp;
-    read(fdSocket, &risp, 1);
-
-    printf("CLIENT: ho ricevuto dal server %c\n", risp);
-
-    //inizio ad inviare il file fino alla fine!
-    int fdFile;
-    if((fdFile = open(argv[2], O_RDONLY)) < 0){
-        perror("Impossibile creare il file!");
-        exit(1);
-    }
-
-    //in fdFile ho il file aperto!
-    /*-----------------------------------------------------------------------------------------------------------
-    TEST!!!
-    Scopriamo che con un file da 80000 byte, il client impiega per la sua esecuzione:
-     - 0.051145 microsec --> se legge da file e invia su socket un char alla volta! (10^-8)
-     - 0.052781 --> se legge 256 byte alla volta e li scrive allo stesso modo
-     - 0.000232 --> se legge 1024 byte alla volta e li scrive allo stesso modo
-
-    char tmp;
-    while((read(fdFile, &tmp, sizeof(tmp))) > 0){
-        write(fdSocket, &tmp, sizeof(char));
-    }
-    ----------------------------------------------------------------------------------------------------------*/
-
-    /*
-    char tmp[DIM_BUFFER];
-    while((read(fdFile, &tmp, sizeof(tmp))) > 0){
-        write(fdSocket, &tmp, strlen(tmp));
-    }
-    close(fdSocket);
-    close(fdFile);
-
 
 //    clock_t end = clock();
 //    double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
