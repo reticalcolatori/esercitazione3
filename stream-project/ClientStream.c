@@ -44,8 +44,6 @@ int main(int argc, char const *argv[]) {
     serverSock.sin_port = htons(12345);
     serverSock.sin_addr.s_addr= ((struct in_addr *)(host->h_addr_list[0]))->s_addr;
 
-//    clock_t begin = clock();
-
     //Preparo variabili per nome e numero linee
     char nomeFile[DIM_BUFFER];
     int nCurrLinee = 0;
@@ -54,6 +52,11 @@ int main(int argc, char const *argv[]) {
     printf("Inserisci un nome di file di cui vuoi rimuovere una linea:\n");
 
     while((fgets(nomeFile, DIM_BUFFER, stdin)) != NULL){
+
+        //prendo tempo di start
+        clock_t begin = clock();
+
+
         //Aggiungo terminatore di stringa!
         nomeFile[strlen(nomeFile)-1] = '\0';
 
@@ -203,16 +206,16 @@ int main(int argc, char const *argv[]) {
         close(fdCurrFile);
         nCurrLinee = 0;
         
+        //prendo il tempo finale
+        clock_t end = clock();
+        double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+        printf("CLIENT: tempo di esecuzione %f sec\n", time_spent);
+
         printf("Inserisci un nome di file di cui vuoi rimuovere una linea (EOF per terminare):\n");
         gets(okstr); 
         //consumo il restante della linea (\n compreso), altrimenti alla prossima iterazione la fgets avrebbe già
         //il resto della linea da leggere
     }
-
-//    clock_t end = clock();
-//    double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
-
-//    printf("CLIENT: tempo di esecuzione %f\n", time_spent);
 
     return 0;
 
