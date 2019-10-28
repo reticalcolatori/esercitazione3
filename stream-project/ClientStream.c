@@ -46,6 +46,7 @@ int main(int argc, char const *argv[]) {
 
     //Preparo variabili per nome e numero linee
     char nomeFile[DIM_BUFFER];
+    char nomeFileTmp[DIM_BUFFER];
     int nCurrLinee = 0;
 
     //chiedo ciclicamente il nome del file da rimuovere la linea fino ad EOF!
@@ -59,6 +60,10 @@ int main(int argc, char const *argv[]) {
 
         //Aggiungo terminatore di stringa!
         nomeFile[strlen(nomeFile)-1] = '\0';
+
+        //Faccio il nome file tmp
+        strcpy(nomeFileTmp, nomeFile);
+        strcat(nomeFileTmp, ".tmp");
 
         //ho il nome del file nuovo: verifico se esiste e se possiedo diritti di rd/wr
         int fdCurrFile = open(nomeFile, O_RDWR);
@@ -149,6 +154,50 @@ int main(int argc, char const *argv[]) {
 
         //invio il file dall'altra parte su fdSocket un carattere alla volta
         char currCh;
+
+        //MODIFICA
+        //Qui creo un figlio che mi popolerà il file temporaneo
+        int childPID = fork();
+
+        if(childPID == 0){
+
+            if((fdCurrFile = open(nomeFileTmp, O_WRONLY | O_TRUNC)) < 0){
+                perror("Impossibile aprire il file temporaneo.");
+                exit(IO_ERR);
+            }
+            printf("Aperto il file temporaneo.\n");
+
+            //ricevo il file in risposta dal server lo salvo sia sul file sia stampo a console
+            while((read(fdSocket, &currCh, sizeof(char))) > 0){
+                //se leggo EOF esci 
+                if(currCh == EOF)
+                    break;
+
+                printf("%c", currCh);
+                if((write(fdCurrFile, &currCh, sizeof(char))) < 0){
+                    perror("Errore scrittura sul file temp.");
+                    close(fdSocket);
+                    close(fdCurrFile);
+                    exit(RX_NETW_ERR);
+                }
+            }
+            printf("CLIENT: ricevuto file dal server senza la linea che andava eliminata!\n");
+
+            // Chiusura socket in ricezione -> non ho più intenzione di ricevere nulla ho consumato tutto l'input!
+            shutdown(fdSocket, 0);
+            close(fdSocket);    //TODO: serve farlo nel padre??
+
+            //chiudo file e risetto a zero il numero delle linee
+            close(fdCurrFile);
+            //nCurrLinee = 0;     //Spostata nel padre.
+            
+            //prendo il tempo finale
+            clock_t end = clock();
+            double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+            printf("CLIENT: tempo di esecuzione %f sec\n", time_spent);
+
+            execlp("mv", "mv", nomeFileTmp, nomeFile, NULL);
+        }
         
         while((read(fdCurrFile, &currCh, sizeof(char))) > 0){
             if((write(fdSocket, &currCh, sizeof(char))) < 0){
@@ -176,40 +225,9 @@ int main(int argc, char const *argv[]) {
         //Una prima apertura per fare tutte le op. ed inviare al server il file.
         //Una seconda con mod O_TRUNC per sovrascrivere il contenuto che mi arriva dal server.
 
-        if((fdCurrFile = open(nomeFile, O_WRONLY | O_TRUNC)) < 0){
-            perror("Impossibile aprire il file per sovrascriverne il contenuto.");
-            exit(IO_ERR);
-        }
-        printf("Riaperto il file in sovrascittura.\n");
+        //SPOSTATO NEL FIGLIO.
 
-        //ricevo il file in risposta dal server lo salvo sia sul file sia stampo a console
-        while((read(fdSocket, &currCh, sizeof(char))) > 0){
-            //se leggo EOF esci 
-            if(currCh == EOF)
-                break;
-
-            printf("%c", currCh);
-            if((write(fdCurrFile, &currCh, sizeof(char))) < 0){
-                perror("Errore sovrascrittura sul file.");
-                close(fdSocket);
-                close(fdCurrFile);
-                exit(RX_NETW_ERR);
-            }
-        }
-        printf("CLIENT: ricevuto file dal server senza la linea che andava eliminata!\n");
-
-        // Chiusura socket in ricezione -> non ho più intenzione di ricevere nulla ho consumato tutto l'input!
-		shutdown(fdSocket, 0);
-        close(fdSocket);
-
-        //chiudo file e risetto a zero il numero delle linee
-        close(fdCurrFile);
         nCurrLinee = 0;
-        
-        //prendo il tempo finale
-        clock_t end = clock();
-        double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
-        printf("CLIENT: tempo di esecuzione %f sec\n", time_spent);
 
         printf("Inserisci un nome di file di cui vuoi rimuovere una linea (EOF per terminare):\n");
         gets(okstr); 
