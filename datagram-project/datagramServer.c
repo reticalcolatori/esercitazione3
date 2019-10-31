@@ -14,39 +14,31 @@
 
 #define LINE_LENGTH 256
 
+//Codici errore
 #define EXIT_ARGS 1
 #define EXIT_HOST_ERR 2
 #define EXIT_SOCKET 3
 #define EXIT_FILE 4
 
-/*Struttura di una richiesta*/
-/********************************************************/
-typedef struct{
-	char nomefile[LINE_LENGTH];
-}Request;
-/********************************************************/
-/********************************************************/
-
 int main(int argc, char **argv){
 	//Variabile per settare l'opzione REUSE_ADDR
 	const int on = 1;
 
-	//Roba di rete
-	int sd;
+	//Predisposizione strutture di rete
+	int sd = -1;
 	struct sockaddr_in cliaddr, servaddr;
 	struct hostent *clienthost;
 	int lenAddress;
 	int port;
 
 	//Campi di richiesta risposta
-	Request req;
+	char nomefile[LINE_LENGTH];
 	int ris;
 
 	//Contatore
 	int i = 0;
 
-	//Roba per file
-	//File Descriptor
+	//Predisposizione strutture fileDescriptor
 	int fd;
 	int nread;
 
@@ -74,7 +66,7 @@ int main(int argc, char **argv){
 		i++;
 	}  	
 
-	 	port = atoi(argv[1]);
+	port = atoi(argv[1]);
 		  
   	if (port < 1024 || port > 65535){
 	      printf("Error: %s port\n", argv[0]);
@@ -89,17 +81,26 @@ int main(int argc, char **argv){
 	servaddr.sin_port = htons(port);  
 
 	/* CREAZIONE, SETAGGIO OPZIONI E CONNESSIONE SOCKET -------------------- */
-	sd=socket(AF_INET, SOCK_DGRAM, 0);
-
-	if(sd <0){perror("creazione socket "); exit(EXIT_SOCKET);}
+	
+	//creazione socket
+	if((sd=socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+		perror("creazione socket ");
+		exit(EXIT_SOCKET);
+	}
 	printf("Server: creata la socket, sd=%d\n", sd);
 
-	if(setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))<0)
-	{perror("set opzioni socket "); exit(EXIT_SOCKET);}
+	//set reuse address
+	if(setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))<0) {
+		perror("set opzioni socket ");
+		exit(EXIT_SOCKET);
+	}
 	printf("Server: set opzioni socket ok\n");
 
-	if(bind(sd,(struct sockaddr *) &servaddr, sizeof(servaddr))<0)
-	{perror("bind socket "); exit(EXIT_SOCKET);}
+	//bind
+	if(bind(sd,(struct sockaddr *) &servaddr, sizeof(servaddr))<0) {
+		perror("bind socket ");
+		exit(EXIT_SOCKET);
+	}
 	printf("Server: bind socket ok\n");
 
 	/* CICLO DI RICEZIONE RICHIESTE ------------------------------------------ */
@@ -108,21 +109,25 @@ int main(int argc, char **argv){
 		//Viene modificata da recvfrom
 		lenAddress=sizeof(struct sockaddr_in);/* valore di ritorno */ 
 
-		if (recvfrom(sd, &req, sizeof(Request), 0, (struct sockaddr *)&cliaddr, &lenAddress)<0)
-		{perror("recvfrom "); continue;}
+		//attendo nome file dal client
+		if (recvfrom(sd, nomefile, LINE_LENGTH, 0, (struct sockaddr *)&cliaddr, &lenAddress)<0) {
+			perror("recvfrom ");
+			continue;
+		}
 
 		//Qui cerco di ricavare info sul client per dirlo su stampa.
 		clienthost=gethostbyaddr( (char *) &cliaddr.sin_addr, sizeof(cliaddr.sin_addr), AF_INET);
 
-		if (clienthost == NULL) printf("client host information not found\n");
-		else printf("Operazione richiesta da: %s %i\n", clienthost->h_name,(unsigned)ntohs(cliaddr.sin_port)); 
+		if (clienthost == NULL)
+			printf("client host information not found\n");
+		else
+			printf("Operazione richiesta da: %s %i\n", clienthost->h_name,(unsigned)ntohs(cliaddr.sin_port)); 
 
-		/*EXEC*/
-		//Cosa dobbiamo fare:
+		//Operazioni: 
 		//1)Verifica che esista il file.
 		//2)In caso positivo apro il file e applico l'algoritmo.
 
-		if ( ( fd = open(req.nomefile, O_RDONLY) ) < 0 ) {
+		if ( ( fd = open(nomefile, O_RDONLY) ) < 0 ) {
         	//non riesco ad aprire il file
 			//Mando come risposta l'errore della open.
 			ris = fd;
@@ -134,12 +139,15 @@ int main(int argc, char **argv){
 
 
 			while((nread = read(fd, &tmpChar, sizeof(char))) > 0){
+				//controllo che il carattere letto sia della mia parola e non un delimitatore
 				if(tmpChar != ' ' && tmpChar != '\n'){
 					currentWordLen++;
 				}else{
+					//la parola è finita, la confronto con la più lunga sin ora
 					if(currentWordLen > maxWordLen){
 						maxWordLen = currentWordLen;
 					}
+					//risetto a zero per conteggio char nuova parola
 					currentWordLen = 0;
 				}
 			}
@@ -163,11 +171,15 @@ int main(int argc, char **argv){
 
 		}
 
+		//converto la risposta in standard di rete
 		ris=htons(ris);
 
 		//Invio risposta.
-		if (sendto(sd, &ris, sizeof(ris), 0, (struct sockaddr *)&cliaddr, lenAddress)<0)
-		{perror("sendto "); continue;}
+		if (sendto(sd, &ris, sizeof(ris), 0, (struct sockaddr *)&cliaddr, lenAddress)<0) {
+			perror("sendto ");
+			continue;
+		}
 
 	} //for
+	
 }
