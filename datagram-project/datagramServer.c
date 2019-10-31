@@ -10,6 +10,7 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <string.h>
+#include <time.h>
 
 #define LINE_LENGTH 256
 
@@ -128,6 +129,10 @@ int main(int argc, char **argv){
     	}else{
 			//File aperto
 
+			//prendo tempo di inizio
+			clock_t begin = clock();
+
+
 			while((nread = read(fd, &tmpChar, sizeof(char))) > 0){
 				if(tmpChar != ' ' && tmpChar != '\n'){
 					currentWordLen++;
@@ -138,6 +143,12 @@ int main(int argc, char **argv){
 					currentWordLen = 0;
 				}
 			}
+
+			//prendo tempo di terminazione
+			clock_t end = clock();
+        	double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+        	printf("CLIENT: tempo di esecuzione %f sec\n", time_spent);
+
 
 			if(nread < 0 ){
 				//non riesco a leggere il file

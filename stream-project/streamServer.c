@@ -1,5 +1,3 @@
-/* Server che riceve un file e lo ridirige ordinato al client */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,26 +10,29 @@
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <time.h>
 #include <netdb.h>
 
 #define LINE_LENGTH 256
 
-#define EXIT_ARGS 1
-#define EXIT_HOST_ERR 2
-#define EXIT_SOCKET 3
-#define EXIT_IO 4
+#define PARAM_ERR 1
+#define NETW_ERR 2
+#define TX_NETW_ERR 3
+#define RX_NETW_ERR 4
+#define IO_ERR 5
+#define FORK_ERR 6
+#define EXEC_ERR 7
 
 
 /********************************************************/
 void gestore(int signo){
-  int stato;
-  printf("esecuzione gestore di SIGCHLD\n");
-  wait(&stato);
+	int stato;
+	printf("esecuzione gestore di SIGCHLD\n");
+	wait(&stato);
 }
 /********************************************************/
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     //Costante per definire REUSE_ADDR
     const int on = 1;
 
@@ -43,7 +44,7 @@ int main(int argc, char **argv)
     int lenAddress;
 
     //Contatore per verifica args.
-    int num;
+    long num;
 	
     //Indirizzi client e server.
 	struct sockaddr_in cliaddr, servaddr;
@@ -53,10 +54,10 @@ int main(int argc, char **argv)
     //Roba per algoritmo
 
     //Linea corrente
-    int currentLine = 0;
+    long currentLine = 0;
 
     //Linea da eliminare
-    int deleteLine = -1;
+    long deleteLine = -1;
 
     //Buffer temporaneo per salvare la linea.
     char buff[LINE_LENGTH];
@@ -68,24 +69,23 @@ int main(int argc, char **argv)
     memset(buff, 0, LINE_LENGTH);
 
 	/* CONTROLLO ARGOMENTI ---------------------------------- */
-	if(argc!=2){
+	if (argc != 2) {
 		printf("Error: %s port\n", argv[0]);
-		exit(1);
-	}
-	else{
-		num=0;
-		while( argv[1][num]!= '\0' ){
+		exit(PARAM_ERR);
+	} else {
+		num = 0;
+		while (argv[1][num] != '\0') {
 			if( (argv[1][num] < '0') || (argv[1][num] > '9') ){
 				printf("Secondo argomento non intero\n");
-				exit(EXIT_ARGS);
+				exit(PARAM_ERR);
 			}
 			num++;
 		} 	
 		port = atoi(argv[1]);
-		if (port < 1024 || port > 65535){
+		if (port < 1024 || port > 65535) {
 			printf("Error: %s port\n", argv[0]);
 			printf("1024 <= port <= 65535\n");
-			exit(EXIT_ARGS);  	
+			exit(PARAM_ERR);  	
 		}
 
 	}
@@ -97,31 +97,31 @@ int main(int argc, char **argv)
 	servaddr.sin_port = htons(port);
 
 	/* CREAZIONE E SETTAGGI SOCKET D'ASCOLTO --------------------------------------- */
-	listen_sd=socket(AF_INET, SOCK_STREAM, 0);
+	listen_sd = socket(AF_INET, SOCK_STREAM, 0);
 	if(listen_sd < 0) {
 		perror("Errore creazione socket.");
-		exit(1);
+		exit(NETW_ERR);
 	}
 	printf("Server: creata la socket d'ascolto, fd=%d\n", listen_sd);
 
     //Imposto REUSE_ADDR
 	if(setsockopt(listen_sd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0){
 		perror("set opzioni socket d'ascolto");
-		exit(1);
+		exit(NETW_ERR);
 	}
 	printf("Server: set opzioni socket d'ascolto ok (impostato reuseaddress).\n");
 
 	//eseguo il binding sono il server devo farlo!
-	if(bind(listen_sd,(struct sockaddr *) &servaddr, sizeof(servaddr)) < 0)	{
+	if (bind(listen_sd,(struct sockaddr *) &servaddr, sizeof(servaddr)) < 0)	{
 		perror("bind socket d'ascolto");
-		exit(1);
+		exit(NETW_ERR);
 	}
 	printf("Server: eseguito binding socket d'ascolto.\n");
 
 	//creo la coda per la ricezione delle richieste di connessione
 	if (listen(listen_sd, 5) < 0) {
 		perror("Errore creazione coda di ascolto."); 
-		exit(1);
+		exit(NETW_ERR);
 	}
 	printf("Server: creata la coda per ricezione delle richieste di connessione.\n");
 
@@ -131,7 +131,7 @@ int main(int argc, char **argv)
 	/* CICLO DI RICEZIONE RICHIESTE --------------------------------------------- */
 	for(;;){ 
         printf("Server: in attesa di richieste di connessione...");
-	  	lenAddress=sizeof(cliaddr);
+	  	lenAddress = sizeof(cliaddr);
 
 		if((conn_sd = accept(listen_sd, (struct sockaddr *)&cliaddr, &lenAddress)) < 0){
 		/* La accept puo' essere interrotta dai segnali inviati dai figli alla loro
@@ -141,31 +141,29 @@ int main(int argc, char **argv)
 				perror("Forzo la continuazione della accept");
 				continue;
 			}
-			else exit(EXIT_SOCKET);
+			else exit(IO_ERR);
 		}
 
-		if (fork()==0){ // figlio itera e processa le richieste fino a quando non riceve EOF!
+		if (fork() == 0){ // figlio itera e processa le richieste fino a quando non riceve EOF!
 			/*Chiusura FileDescr non utilizzati*/
 			close(listen_sd);
-			
 
             //Recupero informazioni client per stampa.
-			host=gethostbyaddr( (char *) &cliaddr.sin_addr, sizeof(cliaddr.sin_addr), AF_INET);
+			host = gethostbyaddr( (char *) &cliaddr.sin_addr, sizeof(cliaddr.sin_addr), AF_INET);
 			if (host == NULL){
 				perror("Impossibile risalire alle informazioni dell'host a partire dal suo indirizzo.\n");
 				continue;
-			}
-			else 
+			} else 
 				printf("Server (figlio): host client è %s\n", host->h_name);
 
             //Leggo il numero della linea da rimuovere.
-            if(read(conn_sd, &deleteLine, sizeof(int)) < 0){
+            if(read(conn_sd, &deleteLine, sizeof(long)) < 0){
                 //Non riesco a leggere la linea da eliminare esco.
                 perror("Impossibile leggere il numero della linea da eliminare.");
-                exit(EXIT_IO);
+                exit(IO_ERR);
             }
 			//se tutto ok non eseguo controlli sono tutti eseguiti dal client nel caso non invia nemmeno la richiesta al server.
-			printf("Linea da cancellare: %d\n", deleteLine);
+			printf("Linea da cancellare: %ld\n", deleteLine);
 			
             //Posso procedere:
             //Inizio a leggere il file
@@ -173,21 +171,13 @@ int main(int argc, char **argv)
             //Se la riga è quella da eliminare non invio indietro.
             
             //Contatore dei caratteri
-            //currentLine = 0;
             num = 0;
 
-			printf("Ricevo file dal client sulla socket connessa fd: %d.\n", conn_sd);
-//--------------------------PROBLEMA QUA SIPIANTA--------------------------------------------------------------//
-            //while((nread = read(conn_sd, &tmpChar, sizeof(char))) > 0){
-			while((read(conn_sd, &tmpChar, sizeof(char))) > 0){
-				
-				if(tmpChar == EOF){
-					//ricevuto EOF dal client
-					printf("Ho ricevuto EOF dal client.\n");
-					break;
-				}
+			//prendo tempo di start
+        	clock_t begin = clock();
 
-				printf("%c", tmpChar);
+			while((read(conn_sd, &tmpChar, sizeof(char))) > 0){
+
                 //Salvo il carattere in un buffer temporaneo.
                 buff[num] = tmpChar;
 
@@ -201,7 +191,6 @@ int main(int argc, char **argv)
                         //Scrivo indietro la riga con \n finale e la stampo!
 						printf("SERVER: rispedisco indietro la linea --> %s\n", buff);
                         write(conn_sd, buff, strlen(buff));
-						//write(conn_sd, "\n", sizeof(char));
                     }
 
                     //Resetto il contatore.
@@ -209,17 +198,21 @@ int main(int argc, char **argv)
                 } else 
 					num++;
             }
-			//devo inviare un EOF per spiantare il client che altrimenti rimane in attesa perenne!!!
-			tmpChar = EOF;
-			if((write(conn_sd, &tmpChar, sizeof(char))) < 0){
-				perror("Impossibile inviare EOF al server!");
-				close(conn_sd);
-			}
-			printf("Inviato un EOF dall'altro lato, sblocco il client ho finito di inviare il file modificato.\n");
+
+			// Chiusura socket in spedizione -> invio dell'EOF
+			shutdown(conn_sd, 1);
+			shutdown(conn_sd, 0);
+       		close(conn_sd);
+
+
+			//prendo il tempo finale
+        	clock_t end = clock();
+        	double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+        	printf("CLIENT: tempo di esecuzione %f sec\n", time_spent);
 
             if(nread < 0){
                 perror("Errore lettura file");
-                exit(EXIT_IO);
+                exit(IO_ERR);
             }
 
 		} // figlio

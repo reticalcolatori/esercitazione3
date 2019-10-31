@@ -9,15 +9,21 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <sys/ioctl.h> 
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 
 #define DIM_BUFFER 256
+#define DIM_WIND 128
 
 #define PARAM_ERR 1
 #define NETW_ERR 2
 #define TX_NETW_ERR 3
 #define RX_NETW_ERR 4
 #define IO_ERR 5
+#define FORK_ERR 6
+#define EXEC_ERR 7
 
 int main(int argc, char const *argv[]) {
     //Client nodoServer
@@ -46,7 +52,7 @@ int main(int argc, char const *argv[]) {
 
     //Preparo variabili per nome e numero linee
     char nomeFile[DIM_BUFFER];
-    int nCurrLinee = 0;
+    long nCurrLinee = 0;
 
     //chiedo ciclicamente il nome del file da rimuovere la linea fino ad EOF!
     printf("Inserisci un nome di file di cui vuoi rimuovere una linea:\n");
@@ -55,7 +61,6 @@ int main(int argc, char const *argv[]) {
 
         //prendo tempo di start
         clock_t begin = clock();
-
 
         //Aggiungo terminatore di stringa!
         nomeFile[strlen(nomeFile)-1] = '\0';
@@ -78,29 +83,31 @@ int main(int argc, char const *argv[]) {
                 nCurrLinee++;
         }
         
-        //una volta che ho terminato LSEEK!!!! Devo rispostare I/O pointer in cima al file.
+        //una volta che ho terminato LSEEK!!!! Devo rispostare I/O pointer all'inizio del file.
         lseek(fdCurrFile, 0, SEEK_SET);
 
         //il file passato presente in nomeFile è corretto: esiste e ho i permessi di rd/wr
         printf("Inserisci il numero di linea da rimuovere dal file, %s:\n", nomeFile);
         
-        int nRmLinea = 0;       //linea da rimuovere
-        int res;                //valore di ritorno di scanf
-        char c;                 //char per consumo buffer fino a EOL
+        long nRmLinea = 0;       //linea da rimuovere
+        int res;                 //valore di ritorno di scanf
+        char c;                  //char per consumo buffer fino a EOL
         char okstr[DIM_BUFFER];
 
         //leggo ciclicamente linea da rimuovere fino a quando non è corretta.
-        while ((res = scanf("%i", &nRmLinea)) != EOF) {
-            printf("Leggo il numero della linea da eliminare = %d.\n", nRmLinea);
+        while ((res = scanf("%ld", &nRmLinea)) != EOF) {
+
             if(res == 1){ //ho effettivamente letto un intero
+
                 if(nRmLinea <= 0){ //verifico se linea da rimuovere è negativa
                     printf("Il numero della linea da rimuovere deve essere > 0!\n");
                     continue;
                 } else if(nRmLinea > nCurrLinee) { //verifico se linea da rimuovere è outofbound
-                    printf("Il numero della linea da rimuovere non esiste nel file %s, numero di linee = %d\n", nomeFile, nCurrLinee);
+                    printf("Il numero della linea da rimuovere non esiste nel file %s, numero di linee = %ld\n", nomeFile, nCurrLinee);
                     continue;
                 }
                 break; //se invece la linea è accettabile esco dal ciclo
+            
             } 
 
             /* ATTENZIONE! Se l'input contiene prima dell'intero altri caratteri la scanf
@@ -133,10 +140,9 @@ int main(int argc, char const *argv[]) {
             exit(NETW_ERR);
         }
         printf("Client: correttamente connesso al server!\n");
-        
 
         //invio il numero della riga da rimuovere
-        if((write(fdSocket, &nRmLinea, sizeof(int))) < 0){
+        if((write(fdSocket, &nRmLinea, sizeof(long))) < 0){
             perror("Errore durante la scrittura del numero di linea da rimuovere al server.");
             //qua sarebbe contro protocollo proseguire dall'altro lato ho il server che si aspetta proprio il numero della 
             //riga da rimuovere! --> chiudo così dopo un po' anche il server si accorgerà che qualcosa non è andato e chiuderà
@@ -145,11 +151,62 @@ int main(int argc, char const *argv[]) {
             close(fdCurrFile);
             exit(TX_NETW_ERR);
         }
-        printf("CLIENT: inviato al server il numero di linea da eliminare %d.\n", nRmLinea);
+        printf("CLIENT: inviato al server il numero di linea da eliminare %ld.\n", nRmLinea);
 
+
+        //creo un figlio a cui delego il compito di consumare tutto input
+        int pid;
+        pid = fork();
+
+        if (pid == 0) { //sono il figlio
+
+            char currCh;
+
+            //vado a leggere nel frattempo la risposta dal server.
+            //se scrivo su un altro file non ci sono problemi, evito si saturi la buffer di ricezione
+
+            int fdFileTemp = -1;
+            
+            if((fdFileTemp = open("tmp.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644)) < 0){
+                perror("Impossibile aprire il file temporaneo.");
+                exit(IO_ERR);
+            }
+            
+            //ricevo il file in risposta dal server lo salvo sia sul file sia stampo a console
+            while((read(fdSocket, &currCh, sizeof(char))) > 0){
+
+                //istruzioni per verificare i dati nel buffer ancora da consumare!
+                //int dataReceiveBufferClient;
+                //ioctl(fdSocket, FIONREAD, &dataReceiveBufferClient);
+                
+                printf("%c", currCh);
+                if((write(fdFileTemp, &currCh, sizeof(char))) < 0){
+                    perror("Errore scrittura sul file temporaneo.");
+                    close(fdSocket);
+                    close(fdFileTemp);
+                    exit(RX_NETW_ERR);
+                }
+            }
+            //giunto qua ho ricevuto, il file dal server e lo ho salvato sul file temporaneo lo sposto sull'originale.
+
+            // Chiusura socket in ricezione -> non ho più intenzione di ricevere nulla ho consumato tutto l'input!
+            shutdown(fdSocket, SHUT_RD);
+
+            //chiudo il file tmp
+            close(fdFileTemp);
+
+            execlp("mv", "mv", "tmp.txt", nomeFile, NULL);
+            perror("Errore esecuzione exec da parte del figlio");
+            close(fdSocket);
+            exit(EXEC_ERR);
+        } 
+        
+        //sono il padre
+        
         //invio il file dall'altra parte su fdSocket un carattere alla volta
         char currCh;
         
+        printf("Client: invio il contenuto del file al server.\n");
         while((read(fdCurrFile, &currCh, sizeof(char))) > 0){
             if((write(fdSocket, &currCh, sizeof(char))) < 0){
                 perror("Errore trasferimento file sul server!");
@@ -157,53 +214,17 @@ int main(int argc, char const *argv[]) {
                 close(fdCurrFile);
             }
         }
-        printf("CLIENT: inviato file %s al server, voglio rimuovere la linea %d.\n", nomeFile, nRmLinea);
-
-        // Chiusura socket in spedizione -> invio dell'EOF
-		shutdown(fdSocket, 1);
+        printf("CLIENT: inviato file %s al server, voglio rimuovere la linea %ld.\n", nomeFile, nRmLinea);
         
+        // Chiusura socket in spedizione -> invio dell'EOF
+        shutdown(fdSocket, SHUT_WR);
         close(fdCurrFile);
+        
         //A questo punto sono riuscito ad inviare tutto il file dall'altra parte e ora divento un filtro ben fatto,
-        //fino a quando il server mi invia qualcosa io vado a sovrascrivere il file che ho appena inviato.
-
-        //---------------------------- 2 STRADE -------------------------------------------//
-
-        //1) UN SOLO FILEDESCRIPTOR (1 OPEN)
-        //Mi devo ricordare innanzitutto di riposizionare I/O pointer in cima al file, e tramite la memset impostare il
-        //contenuto del file a 0, dato che quello che vado a sovrascrivere avrà contenuto più corto.
-
-        //2) DUE APERTURE! --> quella adottata in questa soluzione!
-        //Una prima apertura per fare tutte le op. ed inviare al server il file.
-        //Una seconda con mod O_TRUNC per sovrascrivere il contenuto che mi arriva dal server.
-
-        if((fdCurrFile = open(nomeFile, O_WRONLY | O_TRUNC)) < 0){
-            perror("Impossibile aprire il file per sovrascriverne il contenuto.");
-            exit(IO_ERR);
-        }
-        printf("Riaperto il file in sovrascittura.\n");
-
-        //ricevo il file in risposta dal server lo salvo sia sul file sia stampo a console
-        while((read(fdSocket, &currCh, sizeof(char))) > 0){
-            //se leggo EOF esci 
-            if(currCh == EOF)
-                break;
-
-            printf("%c", currCh);
-            if((write(fdCurrFile, &currCh, sizeof(char))) < 0){
-                perror("Errore sovrascrittura sul file.");
-                close(fdSocket);
-                close(fdCurrFile);
-                exit(RX_NETW_ERR);
-            }
-        }
-        printf("CLIENT: ricevuto file dal server senza la linea che andava eliminata!\n");
-
-        // Chiusura socket in ricezione -> non ho più intenzione di ricevere nulla ho consumato tutto l'input!
-		shutdown(fdSocket, 0);
+        //per questo ho già creato un figlio che ha il compito di consumare tutto l'input che mi ritorna dal server,
+        //per evitare che si saturi la buffer di ricezione del client.        
         close(fdSocket);
 
-        //chiudo file e risetto a zero il numero delle linee
-        close(fdCurrFile);
         nCurrLinee = 0;
         
         //prendo il tempo finale
